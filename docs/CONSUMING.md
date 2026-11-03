@@ -1129,6 +1129,33 @@ identity. Nothing is enforced: whoever holds a thread's id can still read it.
 The listing filters the checkpoint metadata, which has no index, so on Postgres
 it reads the whole `checkpoints` table.
 
+**`feedback` records a verdict on a run.** It is an async function of the
+request and the posted body, and with it `POST /feedback` exists. The runtime
+has no store for feedback; the hook is where it goes, a Langfuse score for
+instance:
+
+```python
+async def score(request, body):
+    langfuse.create_score(
+        name="user-feedback",
+        trace_id=trace_id_for(body.run_id),
+        value=body.score,
+        comment=body.comment,
+    )
+
+
+app.include_router(create_router(provider, feedback=score))
+```
+
+The body carries `threadId`, `runId`, `score` (`1` or `-1`), an optional
+`reason` (`not-helpful`, `incorrect`, `broken` or `other`) and an optional
+`comment`. A `reason` on a thumbs up is refused with `422`. The route checks
+the thread exists, hands the body to the hook, and answers `204`.
+`runId` is the id `RUN_STARTED` announced; every run also writes it into its
+checkpoints' metadata under `run_id`, and `GET /threads/{id}/turns` reports it
+per turn as `runId`, so a client can rate a turn it restored. A resume is a new
+run on the same turn, and the turn names the run that finished it.
+
 **The AG-UI types come from AG-UI.** `messages` on `POST /runs`, and the
 transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message`. That is
 the protocol's own discriminated union. It includes the `activity` role this
@@ -1168,6 +1195,7 @@ meaningful, so it has to stay. Documenting without re-serialising keeps both.
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
 | `GET /connections` | what the agent connected to, its tools, and the credential headers it wants |
+| `POST /feedback` | a thumbs up or down on one run, with a reason and a comment; only with `feedback` |
 
 Every route answers `503` while the agent is not built.
 
@@ -1392,6 +1420,13 @@ Without one, or for a caller with no identity, the column is not drawn.
 thread keeps its own `?thread=` URL. What the new one gives you is empty session
 state, which is per thread.
 
+With a `feedback` hook, thumbs up and down sit under each turn's last answer.
+A press opens a short form, a reason for a thumbs down and a comment for
+either, and **send** posts it to `POST /feedback`. `create_app` turns the
+thumbs on exactly when it has the hook. A host that mounts the page itself sets
+`UiConfig.feedback` from its own hook, as below, since the page cannot tell
+before a visitor presses a thumb.
+
 **Two windows on one conversation.** Say one window opens while another
 window's run holds the thread, or sends a question and is refused because of
 it. It shows "Answering in another window" and disables send. A question that
@@ -1420,6 +1455,17 @@ from mcp_agent_api.ui import mount_ui
 app.include_router(create_router(provider, prefix="/api"))
 mount_ui(app, api="/api")  # the page at /, pointed at your prefix
 mount_ui(app, api="/api", path="/chat")  # or under a path of its own
+```
+
+With a `feedback` hook on the router, tell the page the route exists:
+
+```python
+from dataclasses import replace
+
+from mcp_agent_api.ui import config_from_environment
+
+config = replace(config_from_environment("/api"), feedback=True)
+mount_ui(app, api="/api", config=config)
 ```
 
 `api` is where *the browser* reaches the routes. The client speaks those routes

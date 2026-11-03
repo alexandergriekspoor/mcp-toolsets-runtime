@@ -128,6 +128,14 @@ class UiConfig:
     #: page there is no session to end, and a sign-out that ends nothing would
     #: tell a visitor on a shared machine they were safe to walk away.
     logout_url: str = ""
+    #: Whether the page offers thumbs up and down under each answer. Only
+    #: true where the API registers ``POST /feedback``, which needs a hook from
+    #: the host; the client cannot find that out for itself before a visitor
+    #: presses one, and a thumb that then fails is worse than none. Not read
+    #: from the environment, so it cannot disagree with the hook:
+    #: :func:`~mcp_agent_api.app.create_app` sets it from its ``feedback``, and
+    #: a host that mounts the client itself sets it from its own.
+    feedback: bool = False
 
     def as_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
