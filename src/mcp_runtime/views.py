@@ -193,6 +193,45 @@ def load_view_csp(module_name: str, views: Mapping[str, str]) -> dict[str, ViewC
     return checked
 
 
+#: Who a tool can be for, as MCP Apps' ``_meta.ui.visibility`` names them.
+VISIBILITY_VALUES = frozenset({"model", "app"})
+
+
+def load_visibility(module_name: str) -> dict[str, list[str]]:
+    """A tools module's optional ``VISIBILITY`` export (tool name -> who it is for).
+
+    Raises, naming the entry at fault, unless it is a dict whose every value is
+    a non-empty list of ``"model"`` and ``"app"``. Whether each key is a real
+    tool is :func:`with_view_meta`'s check, which has ``TOOLS`` to hand.
+
+    A tool it does not name keeps the spec's default, ``["model", "app"]``,
+    and goes out with no ``_meta.ui.visibility``. ``["model"]`` keeps a tool
+    from a view's ``tools/call``; ``["app"]`` keeps it out of the agent's tool
+    list, so only a view calls it.
+    """
+    declared = getattr(importlib.import_module(module_name), "VISIBILITY", {})
+    where = f"{module_name}.VISIBILITY"
+    if not isinstance(declared, dict):
+        raise RuntimeError(
+            f'{where} must be a dict of tool name -> a non-empty list of "model" and "app"'
+        )
+    checked: dict[str, list[str]] = {}
+    for tool_name, entry in declared.items():
+        if (
+            not isinstance(tool_name, str)
+            or not isinstance(entry, list)
+            or not entry
+            or not all(isinstance(each, str) for each in entry)
+            or not set(entry) <= VISIBILITY_VALUES
+        ):
+            raise RuntimeError(
+                f'{where}[{tool_name!r}] must be a non-empty list of "model" and '
+                f'"app", not {entry!r}'
+            )
+        checked[tool_name] = list(dict.fromkeys(entry))
+    return checked
+
+
 def view_declarations(
     views: Mapping[str, str], csp: Mapping[str, ViewCsp]
 ) -> dict[str, dict[str, Any]]:
@@ -228,14 +267,18 @@ def with_view_meta(
     module_name: str,
     tools: list[MCPTool],
     views: dict[str, str],
+    visibility: Mapping[str, list[str]] | None = None,
 ) -> list[MCPTool]:
-    """Return ``tools`` with each view-bearing tool's ``_meta`` stamped.
+    """Return ``tools`` with each view-bearing or visibility-declaring tool's ``_meta`` stamped.
 
-    Pure: inputs are left untouched; each view-owning tool is replaced by a copy
-    carrying its ``ui://`` resource URI under ``_meta``. Validates first that
-    every ``VIEWS`` entry names a real tool with a built bundle, raising (naming
-    the offender) otherwise — so a broken view fails ``build_server``.
+    Pure: inputs are left untouched; each tool either export names is replaced
+    by a copy carrying one ``_meta.ui`` object: its ``ui://`` resource URI
+    (``VIEWS``) and who it is for (``VISIBILITY``, :func:`load_visibility`'s
+    output). Validates first that every ``VIEWS`` entry names a real tool with
+    a built bundle, and every ``VISIBILITY`` entry a real tool, raising (naming
+    the offender) otherwise — so a broken declaration fails ``build_server``.
     """
+    visibility = visibility or {}
     names = {tool.name for tool in tools}
     for tool_name, view_id in views.items():
         if tool_name not in names:
@@ -243,13 +286,22 @@ def with_view_meta(
                 f"{module_name}.VIEWS names tool {tool_name!r}, which is not in TOOLS"
             )
         view_html(module_name, view_id)  # raise now if the bundle is missing
+    for tool_name in visibility:
+        if tool_name not in names:
+            raise RuntimeError(
+                f"{module_name}.VISIBILITY names tool {tool_name!r}, which is not in TOOLS"
+            )
 
     def stamped(tool: MCPTool) -> MCPTool:
-        if tool.name not in views:
+        ui: dict[str, Any] = {}
+        if tool.name in views:
+            ui["resourceUri"] = view_resource_uri(toolset, views[tool.name])
+        if tool.name in visibility:
+            ui["visibility"] = list(visibility[tool.name])
+        if not ui:
             return tool
-        uri = view_resource_uri(toolset, views[tool.name])
         return tool.model_copy(
-            update={"meta": {**(tool.meta or {}), VIEW_META_KEY: {"resourceUri": uri}}}
+            update={"meta": {**(tool.meta or {}), VIEW_META_KEY: ui}}
         )
 
     return [stamped(tool) for tool in tools]

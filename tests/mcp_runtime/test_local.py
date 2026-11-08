@@ -145,6 +145,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "credential_headers": [],
                     "state": {"produces": [], "not_authored": []},
                     "views": {},
+                    "visibility": {},
                 },
                 {
                     "name": "beta",
@@ -154,6 +155,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "credential_headers": ["x-demo-token"],
                     "state": {"produces": [], "not_authored": []},
                     "views": {},
+                    "visibility": {},
                 },
             ],
         }

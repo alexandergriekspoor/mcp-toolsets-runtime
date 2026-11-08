@@ -123,6 +123,7 @@ def test_index_route(monkeypatch):
                 "credential_headers": ["x-demo-token"],
                 "state": {"produces": [], "not_authored": []},
                 "views": {},
+                "visibility": {},
             }
         ],
     }

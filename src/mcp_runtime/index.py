@@ -149,6 +149,22 @@ def read_views(views: Any) -> dict[str, ViewDeclarations]:
         return {}
 
 
+#: Parses a ``/health``'s ``visibility``; see :func:`read_visibility`.
+_VISIBILITY = TypeAdapter(dict[str, list[str]])
+
+
+def read_visibility(visibility: Any) -> dict[str, list[str]]:
+    """A toolset's ``/health`` ``visibility``, or ``{}`` if this index can't read it.
+
+    As :func:`read_views`: one entry that fails to parse must not take the
+    other toolsets' entries down with it.
+    """
+    try:
+        return _VISIBILITY.validate_python(visibility or {})
+    except ValidationError:
+        return {}
+
+
 class ToolsetEntry(BaseModel):
     """One deployed toolset in the directory.
 
@@ -156,6 +172,8 @@ class ToolsetEntry(BaseModel):
     tools read; clients should send those credentials only to this toolset's
     connection. ``views`` maps each view id the toolset serves to what it
     declares about it; a toolset on a runtime older than the field lists none.
+    ``visibility`` maps each tool its ``VISIBILITY`` names to who it is for
+    (``"model"``, ``"app"``); a tool it leaves out is for both.
     """
 
     name: str
@@ -165,6 +183,7 @@ class ToolsetEntry(BaseModel):
     credential_headers: list[str] = []
     state: StateDeclarations = StateDeclarations()
     views: dict[str, ViewDeclarations] = {}
+    visibility: dict[str, list[str]] = {}
 
 
 class Connection(BaseModel):
@@ -207,6 +226,7 @@ async def describe(
         credential_headers=health.get("credential_headers", []),
         state=StateDeclarations(**(health.get("state") or {})),
         views=read_views(health.get("views")),
+        visibility=read_visibility(health.get("visibility")),
     )
 
 

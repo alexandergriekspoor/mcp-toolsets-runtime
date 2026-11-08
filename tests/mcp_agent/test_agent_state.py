@@ -449,3 +449,41 @@ def test_the_cli_resolves_a_handle_to_what_it_named():
 def test_the_cli_prints_nothing_for_a_tool_that_took_nothing_from_state():
     assert receipt_lines({"city": "Reading"}, _received({})) == []
     assert receipt_lines({"city": "Reading"}, None) == []
+
+
+def test_an_app_only_tool_is_not_offered_to_the_model(monkeypatch):
+    recorded = _record_create_agent(monkeypatch)
+    with_session_state(
+        "model",
+        [mcp_tool("search"), mcp_tool("outline", {"ui": {"visibility": ["app"]}})],
+    )
+    assert "search" in recorded["tools"]
+    assert "outline" not in recorded["tools"]
+
+
+@pytest.mark.parametrize("session_state", [True, False])
+async def test_build_agent_keeps_app_only_tools_off_the_model_but_listed(
+    monkeypatch, session_state
+):
+    """The model never sees an ``["app"]`` tool; ``BuiltAgent.tools`` keeps it,
+    which is where the view-call route looks."""
+    recorded = _record_create_agent(monkeypatch)
+
+    async def one_server(url):
+        return {"places": {"url": "http://places/mcp"}}, None
+
+    async def tools_of(client):
+        return [
+            mcp_tool("search"),
+            mcp_tool("outline", {"ui": {"visibility": ["app"]}}),
+        ]
+
+    monkeypatch.setattr("mcp_agent.main.fetch_connections", one_server)
+    monkeypatch.setattr("mcp_agent.main.list_tools", tools_of)
+    monkeypatch.setattr("mcp_agent.main.init_chat_model", lambda *a, **k: "model")
+    built = await build_agent(
+        "http://index", "m", SecretStr("k"), session_state=session_state
+    )
+    assert "search" in recorded["tools"]
+    assert "outline" not in recorded["tools"]
+    assert {tool.name for tool in built.tools} == {"search", "outline"}

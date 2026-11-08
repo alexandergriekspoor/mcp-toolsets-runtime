@@ -38,6 +38,7 @@ from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.views import (
     load_view_csp,
     load_views,
+    load_visibility,
     view_declarations,
     views_extension,
     with_view_meta,
@@ -208,9 +209,14 @@ def build_server(
     credential_headers = load_credential_headers(module_name)
     views = load_views(module_name)
     view_csp = load_view_csp(module_name, views)
+    visibility = load_visibility(module_name)
 
     mcp_tools = with_view_meta(
-        toolset, module_name, [to_mcp_tool(tool) for tool in tools], views
+        toolset,
+        module_name,
+        [to_mcp_tool(tool) for tool in tools],
+        views,
+        visibility,
     )
     mcp_tools = with_state_meta(toolset, tools, mcp_tools)
     apps = views_extension(toolset, module_name, views, view_csp)
@@ -240,6 +246,9 @@ def build_server(
                 "credential_headers": credential_headers,
                 "state": state,
                 "views": view_info,
+                # Only the tools VISIBILITY names; the rest are the spec's
+                # default, for both the model and a view.
+                "visibility": visibility,
             }
         )
 

@@ -185,6 +185,7 @@ async def search(query: str) -> SearchResult | ToolError:
 TOOLS = [search]  # required: non-empty list of tools
 # VIEWS = {"search": "gallery"}  # optional: tool_name -> view_id (see "UI views")
 # VIEW_CSP = {"gallery": {"resourceDomains": ["https://cdn.example.com"]}}  # optional
+# VISIBILITY = {"search": ["model"]}  # optional: tool_name -> who it is for
 # CREDENTIAL_HEADERS = ["X-My-Token"]  # optional: headers read off the transport
 ```
 
@@ -209,7 +210,7 @@ TOOLS = [search]  # required: non-empty list of tools
   The runtime derives the server `instructions` from these, so the model is
   told that a credential rides the connection and it shouldn't ask the user for
   it. The credential never enters the model context.
-- **`VIEWS`** and **`VIEW_CSP`**: see
+- **`VIEWS`**, **`VIEW_CSP`** and **`VISIBILITY`**: see
   [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 **A tool can ask the user.** When a tool needs something only the user can
@@ -412,6 +413,8 @@ a user's call:
 | `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
 | every `VIEW_CSP` entry names a served view, with known fields and only origins | `load_view_csp` |
+| `VISIBILITY` maps tool names to non-empty lists of `"model"` and `"app"` | `load_visibility` |
+| every `VISIBILITY` entry names a real tool | `with_view_meta` |
 | every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
 
 What the runtime *can't* ship is the **list of toolsets**. Discovery is by
@@ -527,6 +530,35 @@ index carries it per toolset. So you can review what a deployment's views may
 fetch without reading their code. A toolset without `VIEW_CSP` serves its views
 with no `_meta.ui.csp`, exactly as before.
 
+A view fetching its own toolset's data needs no `connectDomains`: `callTool`
+([3b](#3b-the-view-side-bridge-developmentseedmcp-view)) goes to the host over
+`postMessage`, not over the network. `VIEW_CSP` is for third-party assets,
+such as a basemap's tiles, fonts and styles.
+
+**Declaring who a tool is for (`VISIBILITY`).** MCP Apps puts
+`_meta.ui.visibility` on a tool: `"model"` is the agent's tool list, `"app"` a
+view's `tools/call`. A tool that declares none is for both, the spec's
+default. Name a tool in `VISIBILITY` to narrow it:
+
+```python
+VISIBILITY = {
+    "request_data": ["model"],      # writes or spends: never from a view
+    "boundary_for_map": ["app"],    # only a view calls it; the model never sees it
+}
+```
+
+The runtime stamps each entry into the tool's `_meta.ui`, beside its
+`resourceUri` when it has a view. `build_server` stops on an entry that names a
+tool not in `TOOLS`, or whose value is not a non-empty list of `"model"` and
+`"app"`. Per tool rather than per view, because the spec puts visibility on the
+tool. `/health` lists the declarations under `visibility`, and the index
+carries them per toolset.
+
+The bundled agent honours both halves: it leaves a tool whose visibility does
+not include `"model"` out of the model's tool list, as the spec requires of a
+host, and the view-call route ([5c](#5c-the-routes)) refuses one whose
+visibility does not include `"app"`.
+
 ### 3b. The view-side bridge (`@developmentseed/mcp-view`)
 
 [![npm](https://img.shields.io/npm/v/%40developmentseed%2Fmcp-view?label=npm)](https://www.npmjs.com/package/@developmentseed/mcp-view)
@@ -547,10 +579,9 @@ view came from and answers the view alone, so nothing enters the conversation
 and no model turn is spent. Use it for what the view needs to draw itself, such
 as a geometry too large for the model's context. A host runs only tools whose
 `_meta.ui.visibility` includes `"app"`; a tool that declares none is visible to
-both, which is the spec's default. `callTool` rejects when the host refuses the
-call and when the tool's result has `isError: true`; the second is deliberately
-unlike the SDK's `callServerTool`, which resolves with an error result. The
-bundled web client answers a view's calls only where the deployment has turned
+both, which is the spec's default. `callTool` resolves with the result, including
+one with `isError: true`, as the SDK's `callServerTool` does, and rejects when
+the host refuses the call. The bundled web client answers a view's calls only where the deployment has turned
 them on ([5c](#5c-the-routes)).
 
 A third thing happens with no code of yours. The bridge watches your document
@@ -1359,10 +1390,13 @@ unless you turn it on**: `create_router(..., view_calls=True)`, or
 `create_app(view_calls=True)`, or `MCP_AGENT_API_VIEW_CALLS=true` for the
 bundled app. It is opt-in because the call runs outside the agent. Your
 `middleware`, the interrupt gate, `turn_context` and session state are all
-agent-side, and none of them sees it. What stands between a view and a tool is
+agent-side, and none of them sees it. Nor does any wrapping you put on the MCP
+clients, such as tracing hooks: the route builds its own. What stands between a
+view and a tool is
 the tool's `_meta.ui.visibility` and the credentials the request carries. So
 before you turn it on, make any tool that writes, spends money or is slow
-`["model"]`-only, and rate-limit the route as you would any other route that
+`["model"]`-only in its toolset's `VISIBILITY` export, and rate-limit the
+route as you would any other route that
 calls a toolset: a view can call as often as its code likes.
 
 The body is the
