@@ -85,60 +85,25 @@ export function sendMessage(text: string): void {
  */
 export type CallToolResult = Awaited<ReturnType<App["callServerTool"]>>;
 
-/** A tool that ran and answered `isError: true`.
- *
- * Its own type so a view can tell "the tool said no" — a place that does not
- * exist, an argument out of range — from "the call never got there", which
- * rejects with the SDK's plain `Error`. The message is the result's text, which
- * is what a tool writes its failure in; the whole result is on `result`.
- */
-export class ToolError extends Error {
-  readonly result: CallToolResult;
-
-  constructor(result: CallToolResult) {
-    const text = (result.content ?? [])
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .join("");
-    super(text || "the tool returned an error");
-    this.name = "ToolError";
-    this.result = result;
-  }
-}
-
 /**
  * Call a tool through the host, and get its result back in the view.
  *
  * This is MCP Apps' `tools/call`, sent on the same connection `onData` and
  * `sendMessage` use. The host runs the tool and answers the view alone: nothing
- * enters the conversation, and no model turn is spent. That is the difference
- * from `sendMessage`, which asks the model to call the tool and puts the
- * request and the result in the chat. Use it for what a view needs to draw
- * itself — a boundary too large for the model's context, the next page of a
- * table — rather than for what the conversation should know.
+ * enters the conversation, and no model turn is spent. Use it for what a view
+ * needs to draw itself, such as a boundary too large for the model's context.
  *
- * A host only answers for tools whose `_meta.ui.visibility` includes `"app"`
- * (the spec's default when a tool declares none is `["model", "app"]`), and
- * only for tools of the server the view came from.
+ * A host only answers for tools of the server the view came from whose
+ * `_meta.ui.visibility` includes `"app"` (the spec's default).
  *
- * Resolves with the host's `CallToolResult` when the tool succeeded. Rejects
- * in two cases, both of which are failures a view has to handle:
- *
- *   - the host answered a JSON-RPC error — the tool is not visible to views,
- *     the host does not proxy tool calls, the server could not be reached —
- *     with the SDK's `Error`;
- *   - the tool ran and its result has `isError: true`, with a {@link ToolError}
- *     carrying that result.
- *
- * Rejecting on `isError` is a choice this module makes over the SDK, whose
- * `callServerTool` resolves with such a result and leaves the check to every
- * caller: a view that forgets it would draw an error message as data.
+ * Resolves with the host's `CallToolResult`, including one with
+ * `isError: true`, as the SDK's `callServerTool` does. Rejects when the host
+ * answers a JSON-RPC error.
  */
 export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<CallToolResult> {
   const instance = await app();
-  const result = await instance.callServerTool({ name, arguments: args });
-  if (result.isError) throw new ToolError(result);
-  return result;
+  return instance.callServerTool({ name, arguments: args });
 }

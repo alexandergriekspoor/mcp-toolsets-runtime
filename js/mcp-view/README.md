@@ -36,18 +36,17 @@ too large to put in the model's context, the next page of a table — it can
 call a tool itself:
 
 ```ts
-import { callTool, ToolError } from "@developmentseed/mcp-view";
+import { callTool } from "@developmentseed/mcp-view";
 
 try {
   const result = await callTool("places_get", {
     place_id: data.place_id,
     include: ["boundary"],
   });
-  drawOutline(result.structuredContent);
+  if (result.isError) showProblem(result.content);
+  else drawOutline(result.structuredContent);
 } catch (error) {
-  // ToolError: the tool ran and answered `isError: true` (its result is on
-  // `error.result`). Any other Error: the host refused or could not deliver
-  // the call.
+  // The host refused or could not deliver the call.
 }
 ```
 
@@ -57,10 +56,9 @@ and no model turn is spent, which is the difference from `sendMessage`. A host
 only runs tools whose `_meta.ui.visibility` includes `"app"`; a tool that
 declares none is visible to both the model and views, as the spec says.
 
-`callTool` resolves with the host's `CallToolResult`, and rejects both when the
-host answers an error and when the result has `isError: true` — unlike the
-SDK's `callServerTool`, which resolves with an error result and leaves the
-check to you.
+`callTool` resolves with the host's `CallToolResult`, including one with
+`isError: true`, as the SDK's `callServerTool` does, so check `isError` before
+drawing. It rejects when the host answers an error.
 
 Optionally identify your view during the `ui/initialize` handshake — call it
 before the first `onData`, `sendMessage` or `callTool`:

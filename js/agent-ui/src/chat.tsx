@@ -833,12 +833,7 @@ function View({
           .catch((error: unknown) =>
             answer({
               error: {
-                // Invalid params for a call the API refused as the call's own
-                // fault — a tool for the model only, no such tool (the code
-                // MCP itself answers an unknown tool with), or params that
-                // do not validate. Internal error for anything else: the
-                // toolset unreachable or slow, the agent not built, the
-                // network.
+                // -32602 when the API refused the call (403, 404, 422); -32603 otherwise.
                 code:
                   error instanceof ViewCallError &&
                   [403, 404, 422].includes(error.status)

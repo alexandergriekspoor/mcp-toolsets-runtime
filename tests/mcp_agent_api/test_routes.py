@@ -42,7 +42,7 @@ from mcp_agent_api.refresh import REFRESH_VAR
 from mcp_runtime.credentials import credential_from_header
 from mcp_runtime.server import build_server
 from mcp_runtime.tool_result import ToolResult
-from mcp_state import with_server_name
+from mcp_state import SERVER_METADATA_KEY, with_server_name
 from mcp_agent_api.routes import (
     Built,
     ViewCache,
@@ -1255,6 +1255,34 @@ async def test_a_tool_name_two_toolsets_share_is_the_views_own_toolsets(
 
     assert refused.status_code == 403
     assert allowed.status_code == 200
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_tool_without_a_server_stamp_is_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``build_agent`` stamps every tool with its server, so a tool without one
+    is not taken to be anyone's, even with a single connection."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        unstamped = [
+            each.model_copy(
+                update={
+                    "metadata": {
+                        key: value
+                        for key, value in (each.metadata or {}).items()
+                        if key != SERVER_METADATA_KEY
+                    }
+                }
+            )
+            for each in built.tools
+        ]
+        async with _view_client(built._replace(tools=unstamped)) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.usefixtures("places_view")

@@ -92,9 +92,7 @@ _NO = ("", "0", "false", "no", "off")
 def view_calls_from_environment(value: str | None = None) -> bool:
     """:data:`VIEW_CALLS_VAR` as a yes or no, or a refusal to start.
 
-    A value that is neither stops the process rather than being read as no: a
-    deployment that wrote ``ture`` asked for something, and finding out from a
-    view that cannot call its tools is the slow way to learn it was ignored.
+    Any other value stops the start, so a typo isn't read as off.
     """
     raw = os.environ.get(VIEW_CALLS_VAR, "") if value is None else value
     if raw.strip().lower() in _YES:

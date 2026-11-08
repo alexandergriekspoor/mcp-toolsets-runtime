@@ -133,7 +133,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mcp_agent.host import VIEW_META_KEY, view_bundles, view_uri_for
+from mcp_agent.host import view_bundles, view_uri_for, visibility_of
 from mcp_agent.main import (
     answer_citations,
     answer_follow_ups,
@@ -171,7 +171,7 @@ from mcp_agent_api.history import RUN_ID, Turn, turns_of
 from mcp_agent_api.refresh import refresh_seconds
 from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state import SERVER_METADATA_KEY
-from mcp_state.state import TOOL_STATE_KEY, StateEntry, tool_meta
+from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
 logger = logging.getLogger(__name__)
 
@@ -188,11 +188,6 @@ RUN_IN_PROGRESS = "run_in_progress"
 #: strings, numbers and booleans from a run's metadata, so ``None`` would be
 #: dropped and the thread would look like one from before owners were recorded.
 OWNER = "owner"
-
-#: Who a tool is for when it does not say: the MCP Apps spec's default for
-#: ``_meta.ui.visibility``. ``"model"`` is the agent's tool list, ``"app"`` a
-#: view's ``tools/call``.
-DEFAULT_VISIBILITY: tuple[str, ...] = ("model", "app")
 
 #: Seconds a view's tool call may take before it is answered ``504``. A view
 #: is waiting with nothing drawn, and a call to a toolset that has stopped
@@ -621,34 +616,6 @@ def served_by(tool: BaseTool) -> str | None:
     """
     server = (tool.metadata or {}).get(SERVER_METADATA_KEY)
     return server if isinstance(server, str) and server else None
-
-
-def visibility_of(tool: BaseTool) -> tuple[str, ...]:
-    """Who ``tool`` is for, by its ``_meta.ui.visibility``, or the spec's default.
-
-    Read from the tool as the agent listed it, through :func:`tool_meta` like
-    every other server declaration. **Absent**, it is the spec's default,
-    :data:`DEFAULT_VISIBILITY`. **Present but unreadable** — a string, a list
-    with something other than strings in it, ``null``, a ``ui`` that is not an
-    object — it is nobody, and a warning names the tool. That fails closed on
-    purpose: a server that wrote ``"visibility": "model"`` meant something by
-    it, and of the two guesses the one that lets a view in is the one that can
-    do harm. The model is unaffected either way; nothing here filters what the
-    agent is offered.
-    """
-    ui = tool_meta(tool).get(VIEW_META_KEY)
-    if ui is None or (isinstance(ui, dict) and "visibility" not in ui):
-        return DEFAULT_VISIBILITY
-    declared = ui.get("visibility") if isinstance(ui, dict) else ui
-    if isinstance(declared, list) and all(isinstance(each, str) for each in declared):
-        return tuple(declared)
-    logger.warning(
-        "tool %r declares _meta.ui.visibility as %r, which is not a list of "
-        "strings: treating it as visible to nobody",
-        tool.name,
-        declared,
-    )
-    return ()
 
 
 def latest_user_message(
@@ -1499,77 +1466,28 @@ def create_router(
         ) -> dict[str, Any]:
             """Run one tool for a view, and answer with its result.
 
-            This is the host end of MCP Apps' ``tools/call``: a view asks for data
-            it needs to draw itself, and gets the tool's ``CallToolResult`` back.
-            Post the view's ``params`` as they came, and post the answer back to
-            the view as the result. A tool that ran and failed answers ``200``
-            with ``isError: true``, which is the view's to show.
+            The host end of MCP Apps' ``tools/call``. Post the view's ``params``
+            as they came, and post the answer back to the view as the result. A
+            tool that ran and failed answers ``200`` with ``isError: true``.
 
             Send the same credential headers as on ``POST /runs``.
             \f
-            **Scoped to the view's own toolset.** MCP Apps proxies a view's call to
-            the server the view came from, so the toolset is in the path and a
-            tool another toolset serves is ``404``, as is a view the deployment
-            does not serve. A tool's toolset is the server ``build_agent`` stamped
-            on it (:func:`~mcp_state.with_server_name`); a tool carrying no stamp
-            is taken to be the only connection's when there is just one, and is
-            otherwise not callable, since there is no telling which server would
-            answer it.
-
-            A tool is picked by its name **and** its toolset together: two
-            toolsets may serve tools of the same name, and the one whose
-            visibility is checked has to be the one that is called.
-
-            **Only tools whose visibility includes ``"app"``**, by the tool's
-            ``_meta.ui.visibility`` (:func:`visibility_of`): absent, the spec's
-            default ``["model", "app"]`` applies; present and unreadable, nobody.
-            The tools are the MCP tools the agent listed, so the agent's own
-            (``inspect_state``, ``interrupt``) are not callable here.
-
-            **Outside the agent.** None of the agent-side policy runs: not the
-            host's middleware, not the interrupt gate, not ``turn_context``. That
-            is why the route is opt-in (``view_calls``).
-
-            **Called the way a run calls a tool**: the request's credentials as
-            :func:`credentials_for` resolves them, in force through
-            :func:`~mcp_agent.main.user_credentials`, on a client from
-            :func:`~mcp_agent.main.with_credential_support`. A fresh client per
-            call, never one shared between requests: a fastmcp client is
-            reentrant, and a call joining another caller's session would go out
-            with that caller's headers (see :func:`~mcp_agent.main.list_tools`).
-
-            **Nothing is written.** No thread is named, so nothing is
-            checkpointed, no message is added and no turn is run. Session state
-            is out of it in both directions: :mod:`mcp_state` captures and injects
-            inside the agent, and this call does not go through the agent. An
-            ``@state:<key>`` handle in the arguments reaches the toolset as the
-            literal string, a parameter the toolset declared
-            :class:`~mcp_runtime.declarations.NotAuthored` takes whatever the view
-            wrote (the toolset's own schema still checks it), and nothing the tool
-            returns is captured: the whole result goes to the view.
-
-            A toolset that asks the user a question mid-call (MCP elicitation)
-            cannot be answered here: there is no run to pause, and the call ends
-            in ``502``.
-
-            A failure to answer is logged here with the transport's own words and
-            reported to the view without them: an httpx error names the toolset's
-            address, which is the deployment's business and not the browser's.
-            A call that outlasts ``view_call_timeout`` is ``504``.
+            Only a tool of the view's own toolset, picked by name and toolset
+            together, whose :func:`visibility_of` includes ``"app"``. It runs
+            outside the agent, writes nothing and takes no session state; see
+            :func:`create_router` for what that bypasses. Credentials resolve as
+            for a run, on a fresh client per call. A transport failure, or an MCP
+            elicitation, is ``502``; a call past ``view_call_timeout`` is ``504``.
+            The transport's own error goes to the log, not the response.
             """
             agent = built()
             if await views.html(VIEW_URI.format(toolset=toolset, view=view)) is None:
                 raise HTTPException(404, f"no view {toolset}/{view}")
-            # The only connection's, for a tool with no stamp: one server is
-            # the only one that can have listed it.
-            only = (
-                next(iter(agent.connections)) if len(agent.connections) == 1 else None
-            )
             tool = next(
                 (
                     each
                     for each in agent.tools
-                    if each.name == body.name and (served_by(each) or only) == toolset
+                    if each.name == body.name and served_by(each) == toolset
                 ),
                 None,
             )

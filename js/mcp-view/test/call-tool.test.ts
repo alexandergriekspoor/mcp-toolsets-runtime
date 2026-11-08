@@ -110,23 +110,17 @@ describe("callTool", () => {
     );
   });
 
-  it("rejects when the tool itself failed, with the result on the error", async () => {
+  it("resolves with a result the tool marked isError, as the SDK does", async () => {
     const result = {
       content: [{ type: "text", text: "no place pt-nowhere" }],
       isError: true,
     };
     answerToolCall = () => ({ result });
-    const { callTool, ToolError } = await import("../src/index");
+    const { callTool } = await import("../src/index");
 
-    const failure = await callTool("places_get", { place_id: "pt-nowhere" }).catch(
-      (error: unknown) => error,
-    );
-
-    expect(failure).toBeInstanceOf(ToolError);
-    expect((failure as InstanceType<typeof ToolError>).message).toBe(
-      "no place pt-nowhere",
-    );
-    expect((failure as InstanceType<typeof ToolError>).result).toMatchObject(result);
+    await expect(
+      callTool("places_get", { place_id: "pt-nowhere" }),
+    ).resolves.toMatchObject(result);
   });
 
   it("shares one connection with onData and sendMessage", async () => {
