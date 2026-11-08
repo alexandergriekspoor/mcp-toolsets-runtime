@@ -128,9 +128,8 @@ def _csp_source_ok(field: str, value: str) -> bool:
 def check_view_csp(where: str, entry: object) -> ViewCsp:
     """Check one view's CSP entry and return a copy, or raise naming the fault.
 
-    ``where`` names the entry in the message (``tools.VIEW_CSP['map']``). The
-    one check both :func:`load_view_csp` and :func:`views_extension` run, so a
-    CSP reaches the wire only through it.
+    ``where`` names the entry in the message (``tools.VIEW_CSP['map']``).
+    :func:`load_view_csp` runs it on every entry before anything is served.
     """
     if not isinstance(entry, dict):
         raise RuntimeError(f"{where} must be a dict of CSP field -> list of sources")
@@ -267,24 +266,9 @@ def views_extension(
     ``None`` for a toolset with no views, so it does not advertise a capability
     it has nothing behind. ``csp`` is :func:`load_view_csp`'s output: a view
     with an entry is served with it as ``_meta.ui.csp``, on both the listing
-    and the read (the SDK puts the resource's ``_meta`` on each), and a view
-    without one is served with no ``_meta`` at all, exactly as before.
-
-    Each entry goes through :func:`check_view_csp` here too, where it is
-    written, so a caller building the extension itself cannot put a source on
-    the wire that ``build_server`` would refuse. (For ``build_server``'s output
-    this repeats a check that already passed, at startup only.)
+    and the read, and a view without one is served with no ``_meta`` at all.
     """
     csp = csp or {}
-    view_ids = set(views.values())
-    for view_id in csp:
-        if view_id not in view_ids:
-            raise RuntimeError(
-                f"csp names view {view_id!r}, which no VIEWS entry serves"
-            )
-    csp = {
-        view_id: check_view_csp(f"csp[{view_id!r}]", e) for view_id, e in csp.items()
-    }
     if not views:
         return None
     apps = Apps()

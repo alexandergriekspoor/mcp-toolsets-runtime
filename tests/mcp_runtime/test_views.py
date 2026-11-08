@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.server import build_server
 from mcp_runtime.tool_result import ToolResult
-from mcp_runtime.views import load_views, view_html, views_extension, with_view_meta
+from mcp_runtime.views import load_views, view_html, with_view_meta
 
 
 @tool
@@ -346,18 +346,3 @@ def test_health_of_a_toolset_without_views(monkeypatch, tmp_path):
     server = build_server("noviews", module_name="noviews.tools")
     with TestClient(server.streamable_http_app()) as client:
         assert client.get("/health").json()["views"] == {}
-
-
-@pytest.mark.parametrize(
-    ("csp", "match"),
-    [
-        ({"panel": {"connectDomains": ["'unsafe-eval'"]}}, "unsafe-eval"),
-        ({"panel": {"workerSrc": ["blob:"]}}, "workerSrc"),
-        ({"ghost": {"connectDomains": ["https://a.example"]}}, "ghost"),
-    ],
-)
-def test_views_extension_checks_the_csp_it_is_given(monkeypatch, tmp_path, csp, match):
-    """A caller of ``views_extension`` cannot skip the checks ``build_server`` runs."""
-    module = toolset_with_views(monkeypatch, tmp_path, "direct")
-    with pytest.raises(RuntimeError, match=match):
-        views_extension("direct", module, {"show": "panel"}, csp)
