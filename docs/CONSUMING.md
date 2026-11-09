@@ -542,8 +542,8 @@ default. Name a tool in `VISIBILITY` to narrow it:
 
 ```python
 VISIBILITY = {
-    "request_data": ["model"],      # writes or spends: never from a view
-    "boundary_for_map": ["app"],    # only a view calls it; the model never sees it
+    "request_data": ["model"],  # writes or spends: never from a view
+    "boundary_for_map": ["app"],  # only a view calls it; the model never sees it
 }
 ```
 
