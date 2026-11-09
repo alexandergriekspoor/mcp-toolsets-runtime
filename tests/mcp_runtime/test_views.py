@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.server import build_server
 from mcp_runtime.tool_result import ToolResult
-from mcp_runtime.views import load_views, view_html, with_view_meta
+from mcp_runtime.views import load_views, load_visibility, view_html, with_view_meta
 
 
 @tool
@@ -33,6 +33,7 @@ def toolset_with_views(
     bundles: tuple[str, ...] = ("panel",),
     tools: list | None = None,
     view_csp: object = None,
+    visibility: object = None,
 ) -> str:
     """Register a synthetic ``<package>`` + ``<package>.tools`` with a views dir.
 
@@ -56,6 +57,8 @@ def toolset_with_views(
     module.VIEWS = {"show": "panel"} if views is None else views  # type: ignore[attr-defined]
     if view_csp is not None:
         module.VIEW_CSP = view_csp  # type: ignore[attr-defined]
+    if visibility is not None:
+        module.VISIBILITY = visibility  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, module_name, module)
     return module_name
 
@@ -91,6 +94,73 @@ def test_with_view_meta_unknown_tool(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="ghost"):
         with_view_meta("unknown", module, [to_mcp_tool(show)], {"ghost": "panel"})
+
+
+def test_with_view_meta_stamps_visibility_beside_the_view(monkeypatch, tmp_path):
+    """One ``ui`` object per tool, carrying whichever keys the exports give it."""
+    module = toolset_with_views(monkeypatch, tmp_path, "seen", tools=[show, other])
+    shown, plain = with_view_meta(
+        "seen",
+        module,
+        [to_mcp_tool(show), to_mcp_tool(other)],
+        {"show": "panel"},
+        {"show": ["app"], "other": ["model"]},
+    )
+    assert shown.meta == {
+        "ui": {"resourceUri": "ui://seen/panel", "visibility": ["app"]}
+    }
+    assert plain.meta == {"ui": {"visibility": ["model"]}}
+
+
+def test_with_view_meta_leaves_an_undeclared_tool_alone(monkeypatch, tmp_path):
+    module = toolset_with_views(monkeypatch, tmp_path, "quiet", views={})
+    (tool,) = with_view_meta("quiet", module, [to_mcp_tool(show)], {}, {})
+    assert tool.meta is None
+
+
+def test_with_view_meta_refuses_visibility_for_an_unknown_tool(monkeypatch, tmp_path):
+    module = toolset_with_views(monkeypatch, tmp_path, "typo")
+    with pytest.raises(RuntimeError, match=r"VISIBILITY names tool 'shwo'"):
+        with_view_meta(
+            "typo", module, [to_mcp_tool(show)], {"show": "panel"}, {"shwo": ["app"]}
+        )
+
+
+def test_load_visibility_without_the_export_is_empty(monkeypatch, tmp_path):
+    assert load_visibility(toolset_with_views(monkeypatch, tmp_path, "none")) == {}
+
+
+@pytest.mark.parametrize(
+    "visibility",
+    [
+        ["app"],
+        {"show": "app"},
+        {"show": []},
+        {"show": ["user"]},
+        {"show": ["app", 3]},
+        {"show": None},
+    ],
+)
+def test_load_visibility_refuses_a_bad_entry(monkeypatch, tmp_path, visibility):
+    module = toolset_with_views(monkeypatch, tmp_path, "bad", visibility=visibility)
+    with pytest.raises(RuntimeError, match="VISIBILITY"):
+        load_visibility(module)
+
+
+async def test_build_server_stamps_visibility_and_lists_it(monkeypatch, tmp_path):
+    toolset_with_views(
+        monkeypatch,
+        tmp_path,
+        "vis",
+        tools=[show, other],
+        visibility={"other": ["model"]},
+    )
+    server = build_server("vis", module_name="vis.tools")
+    listed = {tool.name: tool for tool in await server.list_tools()}
+    assert listed["other"].meta == {"ui": {"visibility": ["model"]}}
+    assert listed["show"].meta == {"ui": {"resourceUri": "ui://vis/panel"}}
+    with TestClient(server.streamable_http_app()) as client:
+        assert client.get("/health").json()["visibility"] == {"other": ["model"]}
 
 
 async def test_build_server_registers_view_resource(monkeypatch, tmp_path):

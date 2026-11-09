@@ -73,6 +73,7 @@ from mcp_agent.interrupt_gate import (
     response_from_reply,
 )
 from mcp_agent.history import CheckpointHistory
+from mcp_agent.host import for_model
 from mcp_agent.interrupted_tool_calls import repair_interrupted_tool_calls
 from mcp_agent.interrupts import CANCELLED, PendingInterrupt, pending, turn_input
 from mcp_agent.run_lock import (
@@ -771,7 +772,7 @@ def with_session_state(
     return create_agent(
         model,
         [
-            *bind_all_injected(tools),
+            *bind_all_injected(for_model(tools)),
             make_inspect_state(
                 state_keys(published),
                 # Only where there is a past to read. A key holds one value, so
@@ -903,7 +904,7 @@ async def build_agent(
             create_agent(
                 chat_model,
                 [
-                    *tools,
+                    *for_model(tools),
                     *(
                         with_interrupt_gate(extra_tools, checkpointer)
                         if interrupt_gate

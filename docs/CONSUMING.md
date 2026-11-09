@@ -185,6 +185,7 @@ async def search(query: str) -> SearchResult | ToolError:
 TOOLS = [search]  # required: non-empty list of tools
 # VIEWS = {"search": "gallery"}  # optional: tool_name -> view_id (see "UI views")
 # VIEW_CSP = {"gallery": {"resourceDomains": ["https://cdn.example.com"]}}  # optional
+# VISIBILITY = {"search": ["model"]}  # optional: tool_name -> who it is for
 # CREDENTIAL_HEADERS = ["X-My-Token"]  # optional: headers read off the transport
 ```
 
@@ -209,7 +210,7 @@ TOOLS = [search]  # required: non-empty list of tools
   The runtime derives the server `instructions` from these, so the model is
   told that a credential rides the connection and it shouldn't ask the user for
   it. The credential never enters the model context.
-- **`VIEWS`** and **`VIEW_CSP`**: see
+- **`VIEWS`**, **`VIEW_CSP`** and **`VISIBILITY`**: see
   [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 **A tool can ask the user.** When a tool needs something only the user can
@@ -412,6 +413,8 @@ a user's call:
 | `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
 | every `VIEW_CSP` entry names a served view, with known fields and only origins | `load_view_csp` |
+| `VISIBILITY` maps tool names to non-empty lists of `"model"` and `"app"` | `load_visibility` |
+| every `VISIBILITY` entry names a real tool | `with_view_meta` |
 | every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
 
 What the runtime *can't* ship is the **list of toolsets**. Discovery is by
@@ -527,6 +530,35 @@ index carries it per toolset. So you can review what a deployment's views may
 fetch without reading their code. A toolset without `VIEW_CSP` serves its views
 with no `_meta.ui.csp`, exactly as before.
 
+A view fetching its own toolset's data needs no `connectDomains`: `callTool`
+([3b](#3b-the-view-side-bridge-developmentseedmcp-view)) goes to the host over
+`postMessage`, not over the network. `VIEW_CSP` is for third-party assets,
+such as a basemap's tiles, fonts and styles.
+
+**Declaring who a tool is for (`VISIBILITY`).** MCP Apps puts
+`_meta.ui.visibility` on a tool: `"model"` is the agent's tool list, `"app"` a
+view's `tools/call`. A tool that declares none is for both, the spec's
+default. Name a tool in `VISIBILITY` to narrow it:
+
+```python
+VISIBILITY = {
+    "request_data": ["model"],  # writes or spends: never from a view
+    "boundary_for_map": ["app"],  # only a view calls it; the model never sees it
+}
+```
+
+The runtime stamps each entry into the tool's `_meta.ui`, beside its
+`resourceUri` when it has a view. `build_server` stops on an entry that names a
+tool not in `TOOLS`, or whose value is not a non-empty list of `"model"` and
+`"app"`. Per tool rather than per view, because the spec puts visibility on the
+tool. `/health` lists the declarations under `visibility`, and the index
+carries them per toolset.
+
+The bundled agent honours both halves: it leaves a tool whose visibility does
+not include `"model"` out of the model's tool list, as the spec requires of a
+host, and the view-call route ([5c](#5c-the-routes)) refuses one whose
+visibility does not include `"app"`.
+
 ### 3b. The view-side bridge (`@developmentseed/mcp-view`)
 
 [![npm](https://img.shields.io/npm/v/%40developmentseed%2Fmcp-view?label=npm)](https://www.npmjs.com/package/@developmentseed/mcp-view)
@@ -535,11 +567,22 @@ Your bundle talks to whatever host embeds it through the standard `ui/*`
 protocol. Import that bridge from the npm package instead of vendoring `host.ts`:
 
 ```ts
-import { onData, sendMessage } from "@developmentseed/mcp-view";
+import { callTool, onData, sendMessage } from "@developmentseed/mcp-view";
 
 onData((data) => render(data));       // the tool's structuredContent, from the host
 button.onclick = () => sendMessage("run the next thing"); // a user turn back to the chat
+const more = await callTool("places_get", { place_id }); // a tool's result, for the view alone
 ```
+
+`callTool` is MCP Apps' `tools/call`. The host runs the tool on the server the
+view came from and answers the view alone, so nothing enters the conversation
+and no model turn is spent. Use it for what the view needs to draw itself, such
+as a geometry too large for the model's context. A host runs only tools whose
+`_meta.ui.visibility` includes `"app"`; a tool that declares none is visible to
+both, which is the spec's default. `callTool` resolves with the result, including
+one with `isError: true`, as the SDK's `callServerTool` does, and rejects when
+the host refuses the call. The bundled web client answers a view's calls only where the deployment has turned
+them on ([5c](#5c-the-routes)).
 
 A third thing happens with no code of yours. The bridge watches your document
 and tells the host how tall it is, using the `ui/notifications/size-changed`
@@ -1032,7 +1075,13 @@ they mean in [4](#4-session-state-keeping-large-values-out-of-the-model). So an
 API deployment gets session state and resumable threads on the same terms as the
 bundled host.
 
-`MCP_AGENT_API_CORS_ORIGINS` is the one setting the API adds. It is
+`MCP_AGENT_API_VIEW_CALLS` (default off) lets views call their own toolset's
+tools through `POST /views/{toolset}/{view}/call`. It takes `true`, `1`, `yes`
+or `on`, and `false`, `0`, `no`, `off` or empty; anything else stops the
+process at startup. Read [5c](#5c-the-routes) for what that call bypasses
+before you turn it on.
+
+`MCP_AGENT_API_CORS_ORIGINS` is
 comma-separated (`https://a,https://b`) rather than JSON, because that is what
 someone writes in a Helm values file. Leave it unset for a UI on the same
 origin, or one reached through a dev server's proxy, and no CORS middleware is
@@ -1260,6 +1309,7 @@ meaningful, so it has to stay. Documenting without re-serialising keeps both.
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
+| `POST /views/{toolset}/{view}/call` | one tool call for that view, MCP Apps' `tools/call`: the result goes to the view, nothing to the thread; only with `view_calls` |
 | `GET /connections` | what the agent connected to, its tools, and the credential headers it wants |
 | `POST /feedback` | a thumbs up or down on one run, with a reason and a comment; only with `feedback` |
 
@@ -1334,6 +1384,43 @@ It also means the id must be treated as a secret, since it leaks through logs,
 referrers and browser history like any other part of a URL. If a thread belongs
 to a user, put your own dependency in front of the router
 ([5b](#5b-mounting-the-routes-into-your-own-application)).
+
+**`POST /views/{toolset}/{view}/call` is a view's tool call, and it is off
+unless you turn it on**: `create_router(..., view_calls=True)`, or
+`create_app(view_calls=True)`, or `MCP_AGENT_API_VIEW_CALLS=true` for the
+bundled app. It is opt-in because the call runs outside the agent. Your
+`middleware`, the interrupt gate, `turn_context` and session state are all
+agent-side, and none of them sees it. Nor does any wrapping you put on the MCP
+clients, such as tracing hooks: the route builds its own. What stands between a
+view and a tool is
+the tool's `_meta.ui.visibility` and the credentials the request carries. So
+before you turn it on, make any tool that writes, spends money or is slow
+`["model"]`-only in its toolset's `VISIBILITY` export, and rate-limit the
+route as you would any other route that
+calls a toolset: a view can call as often as its code likes.
+
+The body is the
+`params` of the view's `tools/call`, `{"name": …, "arguments": {…}}`, and the
+answer is MCP's `CallToolResult` as the toolset sent it, for the host to post
+back to its view. It names no thread: nothing is checkpointed, no message is
+added and the model does not run. Session state is out of it too, because
+capture and injection happen inside the agent and this call does not go
+through it. An `@state:` handle in the arguments reaches the toolset as a
+plain string, and nothing the tool returns is stored.
+
+The tool has to belong to the view's own toolset, since MCP Apps proxies a
+view's calls to the server it came from, and its `_meta.ui.visibility` has to
+include `"app"`. A tool is picked by its name and its toolset together, so two
+toolsets with a tool of the same name do not stand in for each other. A tool
+for the model only is `403`, and so is one whose visibility is present but not
+a list of strings: that fails closed, with a warning in the log. An unknown view, or a tool
+the view's toolset does not serve, is `404`. A tool that ran and failed is a
+`200` with `isError: true`, because that is the tool's answer to the view. A
+toolset that cannot be reached is `502`, with a detail naming only the toolset
+and the tool; the transport's own error goes to the log. A call that takes
+longer than `view_call_timeout` (30 seconds unless you pass another) is `504`.
+The call carries the same credential headers as a run, resolved the same way,
+on a client of its own.
 
 **`GET /connections` is the one route that is not about a conversation.** It
 answers the two questions a client has before there is one: what can this agent
@@ -1446,7 +1533,8 @@ the same key from a `.env`. The CLI exposes it as a repeatable
 `--header NAME=VALUE`. `GET /connections` reports it, so a client can skip
 asking for anything the deployment already supplies.
 
-**From the request.** `POST /runs` calls `credentials_for(request.headers,
+**From the request.** `POST /runs`, and a view's
+`POST /views/{toolset}/{view}/call`, call `credentials_for(request.headers,
 built.required)`. That takes off the request only the headers a connected
 toolset actually declared, and falls back to the environment for the rest.
 
@@ -1482,6 +1570,17 @@ it. The panel starts closed, and closed, the page is a chat.
 With an `owner` hook, a collapsible column on the right lists the caller's
 threads (`GET /threads`), each by its first question and when it was started.
 Without one, or for a caller with no identity, the column is not drawn.
+
+Where the deployment has turned view calls on, a view drawn in the page can
+call its own toolset's tools (`callTool` in `@developmentseed/mcp-view`). The
+page tells its views so (`serverTools` in `ui/initialize`), forwards each
+`tools/call` to `POST /views/{toolset}/{view}/call` with the visitor's
+credential headers, the same ones a run sends, and posts the result back to the
+view. Nothing is added to the transcript. A reply is dropped if the view has
+reloaded since it asked. Where view calls are off, the page does not offer
+`serverTools` and answers a `tools/call` with an error. `create_app` sets this
+from its `view_calls`; a host mounting the page itself sets
+`UiConfig.view_calls` from its own.
 
 **New chat** in the header starts a new thread. Nothing is deleted, and the old
 thread keeps its own `?thread=` URL. What the new one gives you is empty session

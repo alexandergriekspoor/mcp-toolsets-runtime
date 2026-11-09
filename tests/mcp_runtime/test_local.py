@@ -145,6 +145,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "credential_headers": [],
                     "state": {"produces": [], "not_authored": []},
                     "views": {},
+                    "visibility": {},
                 },
                 {
                     "name": "beta",
@@ -154,6 +155,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "credential_headers": ["x-demo-token"],
                     "state": {"produces": [], "not_authored": []},
                     "views": {},
+                    "visibility": {},
                 },
             ],
         }
@@ -182,6 +184,24 @@ def test_index_carries_state_declarations(monkeypatch):
         ],
         "not_authored": [{"tool": "clip_raster", "parameter": "aoi"}],
     }
+
+
+def test_index_carries_visibility(monkeypatch):
+    """The local index lists ``VISIBILITY`` as a toolset's ``/health`` does."""
+    tools_module(
+        monkeypatch,
+        "delta.tools",
+        TOOLS=[echo, whoami],
+        VISIBILITY={"echo": ["app"], "whoami": ["model"]},
+    )
+    app = build_local_app(["delta"], base_url="http://localhost:8000")
+
+    with TestClient(app) as client:
+        entry = client.get("/").json()["toolsets"][0]
+        health = client.get("/delta/health").json()
+
+    assert entry["visibility"] == {"echo": ["app"], "whoami": ["model"]}
+    assert entry["visibility"] == health["visibility"]
 
 
 def test_health_route(monkeypatch):

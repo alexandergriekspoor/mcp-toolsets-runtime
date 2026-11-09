@@ -46,7 +46,12 @@ from pydantic_settings import BaseSettings, NoDecode
 
 from mcp_runtime.declarations import state_declarations
 from mcp_runtime.index import Connection, Index, StateDeclarations, ToolsetEntry
-from mcp_runtime.views import load_view_csp, load_views, view_declarations
+from mcp_runtime.views import (
+    load_view_csp,
+    load_views,
+    load_visibility,
+    view_declarations,
+)
 from mcp_runtime.server import (
     ToolsetServer,
     build_server,
@@ -147,6 +152,7 @@ def build_local_app(
                 # Same declarations either way — this process already holds them.
                 state=StateDeclarations(**state_declarations(name, tools)),
                 views=view_declarations(views, view_csp),
+                visibility=load_visibility(module_name),
             )
         )
 
